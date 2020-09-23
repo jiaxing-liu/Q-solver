@@ -5,29 +5,23 @@ module constants
 end module constants
 
 program calcI
-use omp_lib
 use constants
 implicit none
-real(kind=8)::start,finish1,finish11,finish2,finish3,finish,inte1
-integer::i,j,k,numm,flag2
-real(kind=8),dimension(n,n)::R,Z,psi,q,Ic
+real(kind=8)::start,finish1,finish11,finish2,finish3,finish,inte1,BR,BZ,RRR,ZZZ
+integer::i,j,k,numm,flag2,l,rr,u,d
+real(kind=8),dimension(n,n)::R,Z,psi,q,Ic,B_R,B_Z
 integer,dimension(n,n)::num,order
 real(kind=8),dimension(n,n,0:10000)::Rm,Zm,psim,dll,nablapsi
 !Initialization
 dll(:,:,:)=0
 nablapsi(:,:,:)=0
-call omp_set_num_threads(10)
 call cpu_time(start)
 open(11,file='q.plt')
-!!$OMP PArallel
-!!$OMP do
 do j=1,n
         do i=1,n
         read(11,*)R(i,j),Z(i,j),psi(i,j),q(i,j)
         enddo
 enddo
-!!$OMP enddo
-!!$OMP end parallel
 close(11)
 psim(:,:,:)=0;Rm(:,:,:)=0;Zm(:,:,:)=0
 do i=1,n
@@ -36,14 +30,40 @@ Rm(i,j,0)=R(i,j);Zm(i,j,0)=Z(i,j);psim(i,j,0)=psi(i,j)
 enddo
 enddo
 
-call findflux(R,Z,psi,Rm,Zm,psim,order,numm,num)
+!calculate BR,BZ
+
+do i=1,n
+   do j=1,n
+      if(i>1.and.i<n)then
+         B_Z(i,j)=(psi(i+1,j)-psi(i-1,j))/(2*pi*R(i,j)*(R(i+1,j)-R(i-1,j)))
+      elseif(i==1)then
+         B_Z(i,j)=(psi(i+1,j)-psi(i,j))/(2*pi*R(i,j)*(R(i+1,j)-R(i,j)))
+      elseif(i==n)then
+         B_Z(i,j)=(psi(i,j)-psi(i-1,j))/(2*pi*R(i,j)*(R(i,j)-R(i-1,j)))
+      endif
+      if(j>1.and.j<n)then
+         B_R(i,j)=-(psi(i,j+1)-psi(i,j-1))/(2*pi*R(i,j)*(Z(i,j+1)-Z(i,j-1)))
+      elseif(j==1)then
+         B_R(i,j)=-(psi(i,j+1)-psi(i,j))/(2*pi*R(i,j)*(Z(i,j+1)-Z(i,j)))
+      elseif(j==n)then
+         B_R(i,j)=-(psi(i,j)-psi(i,j-1))/(2*pi*R(i,j)*(Z(i,j)-Z(i,j-1)))
+      endif
+   enddo
+enddo
+
+call findflux(R,Z,B_R,B_Z,psi,Rm,Zm,psim,order,numm,num)
 call cpu_time(finish1)
 
 do i=1,n
 do j=1,n
         if(order(i,j)<=numm.and.0<order(i,j))then
         do k=0,num(i,j)
-                call calc_nablapsi(i,j,k,R,Z,psi,Rm,Zm,psim,nablapsi,order,numm,num)
+           RRR=Rm(i,j,k)
+           ZZZ=Zm(i,j,k)
+           call calc_BRBZ(RRR,ZZZ,R,Z,B_R,B_Z,psi,Rm,Zm,Br,Bz,l,rr,u,d)
+           nablapsi(i,j,k)=2*pi*Rm(i,j,k)*sqrt(BR**2+BZ**2)
+
+           !          call calc_nablapsi(i,j,k,R,Z,psi,Rm,Zm,psim,nablapsi,order,numm,num)
         enddo
         endif
 enddo
@@ -96,12 +116,12 @@ print*,'calc_nabla time',finish2-finish1,'seconds'
 print*,'Time=',finish-start,'seconds'
 end program calcI
 
-subroutine findflux(R,Z,psi,Rm,Zm,psim,order,numm,num)
+subroutine findflux(R,Z,B_R,B_Z,psi,Rm,Zm,psim,order,numm,num)
 use constants
 implicit none
 integer::i0,j0,i,j,k,ii,jj,kk,iii,jjj,kkk,flag1,numm,flag2
 real(kind=8)::min11,psi_min,psi_max,f1,f2,f3,f4
-real(kind=8),dimension(n,n)::R,Z,psi
+real(kind=8),dimension(n,n)::R,Z,psi,B_R,B_Z
 integer,dimension(n,n)::num,m,order
 character(len=3)::filename1,filename2
 real(kind=8),dimension(n,n,0:10000)::Rm,Zm,psim
@@ -123,15 +143,13 @@ psi_max=psi(i,j)
 endif
 enddo
 enddo
-!!$OMP PArallel
-!!$OMP do
 !do i=50,70
 do i=1,n
 !        do j=50,70
         do j=1,n
         flag1=1
 !        if(i==40.and.j==60)then
-        call findfluxI(i,j,R,Z,psi,Rm,Zm,psim,num,flag1,psi_min,psi_max)
+        call findfluxI(i,j,R,Z,B_R,B_Z,psi,Rm,Zm,psim,num,flag1,psi_min,psi_max)
 !        endif
         if(flag1==1)then
         numm=numm+1
@@ -140,8 +158,6 @@ do i=1,n
         endif
         enddo
 enddo
-!!$OMP enddo
-!!$OMP end parallel
 print*,'numm=',numm
 i=40;j=60
 open(1111,file='psim24060.plt')
@@ -167,41 +183,6 @@ do k=1,numm
                 endif
         enddo
 enddo
-!do kk=1,numm
-!        flag2=0
-!        do i=1,n
-!        do j=1,n
-!        if(m(i,j)==kk)then
-!        min11=psi(i,j);flag2=1;ii=i;jj=j
-!        exit
-!        endif
-!        enddo
-!        if(flag2==1)then
-!        exit
-!        endif
-!        enddo
-!        
-!        do k=kk,numm
-!        flag2=0
-!        do i=1,n
-!        do j=1,n
-!        if(m(i,j)==k)then
-!                if(psi(i,j)<=min11)then
-!                min11=psi(i,j)
-!                iii=i;jjj=j;kkk=k
-!                endif
-!                flag2=1
-!                exit
-!        endif
-!        enddo
-!       if(flag2==1)then
-!        exit
-!        endif
-!        enddo
-!        enddo
-!        order(iii,jjj)=kk;m(iii,jjj)=kk;m(ii,jj)=kkk
-!        print*,'pai xu',kk
-!enddo
 !!ci mian dian shu
 open(22,file='num.dat')
 !do k=1,numm
@@ -258,12 +239,12 @@ if(l<r)then
 endif
 end subroutine quick_sort
 
-subroutine findfluxI(i0,j0,R,Z,psi,Rm,Zm,psim,num,flag1,psi_min,psi_max)
+subroutine findfluxI(i0,j0,R,Z,B_R,B_Z,psi,Rm,Zm,psim,num,flag1,psi_min,psi_max)
 use constants
 implicit none
 integer::i0,j0,i,j,k,l,rr,u,d,flag1
 real(kind=8)::ddl,Br,Bz,dl,Br1,Br2,Br3,Br4,Bz1,Bz2,Bz3,Bz4,rrr,zzz,k1,k2,k3,k4,temp1,temp2,psi_min,psi_max,dl_min,dl_max
-real(kind=8),dimension(n,n)::R,Z,psi
+real(kind=8),dimension(n,n)::R,Z,psi,B_R,B_Z
 integer,dimension(n,n)::num
 real(kind=8),dimension(n,n,0:10000)::Rm,Zm,psim
 dl_max=0.001
@@ -278,7 +259,7 @@ do while(dl(i0,j0,k,R,Z,Rm,Zm)>=ddl.or.num(i0,j0)<10)
         else if(num(i0,j0)>0)then
         RRR=Rm(i0,j0,num(i0,j0));ZZZ=Zm(i0,j0,num(i0,j0))
         endif
-        call calc_BRBZ(RRR,ZZZ,R,Z,psi,Rm,Zm,Br,Bz,l,rr,u,d)
+        call calc_BRBZ(RRR,ZZZ,R,Z,B_R,B_Z,psi,Rm,Zm,Br,Bz,l,rr,u,d)
         BR1=BR;BZ1=Bz;k1=Bz1/Br1;
         !calculate k2
         if(l<rr.and.d<u)then
@@ -292,7 +273,7 @@ do while(dl(i0,j0,k,R,Z,Rm,Zm)>=ddl.or.num(i0,j0)<10)
         else
         flag1=0
         endif
-        call calc_BRBZ(RRR,ZZZ,R,Z,psi,Rm,Zm,Br,Bz,l,rr,u,d)
+        call calc_BRBZ(RRR,ZZZ,R,Z,B_R,B_Z,psi,Rm,Zm,Br,Bz,l,rr,u,d)
         BR2=BR;BZ2=Bz;k2=Bz2/Br2;
         !calculate k3
         if(l<rr.and.d<u)then
@@ -306,7 +287,7 @@ do while(dl(i0,j0,k,R,Z,Rm,Zm)>=ddl.or.num(i0,j0)<10)
         else
         flag1=0
         endif
-        call calc_BRBZ(RRR,ZZZ,R,Z,psi,Rm,Zm,Br,Bz,l,rr,u,d)
+        call calc_BRBZ(RRR,ZZZ,R,Z,B_R,B_Z,psi,Rm,Zm,Br,Bz,l,rr,u,d)
         BR3=BR;BZ3=Bz;k3=Bz3/Br3;
         !calculate k4
         if(l<rr.and.d<u)then
@@ -320,7 +301,7 @@ do while(dl(i0,j0,k,R,Z,Rm,Zm)>=ddl.or.num(i0,j0)<10)
         else
         flag1=0
         endif
-        call calc_BRBZ(RRR,ZZZ,R,Z,psi,Rm,Zm,Br,Bz,l,rr,u,d)
+        call calc_BRBZ(RRR,ZZZ,R,Z,B_R,B_Z,psi,Rm,Zm,Br,Bz,l,rr,u,d)
         BR4=BR;BZ4=Bz;k4=Bz4/Br4;
         if(l<rr.and.u>d)then
         else
@@ -357,12 +338,12 @@ flag1=0
 endif
 end subroutine findfluxI
 
-subroutine calc_BRBZ(RRR,ZZZ,R,Z,psi,Rm,Zm,Br,Bz,l,rr,u,d)
+subroutine calc_BRBZ(RRR,ZZZ,R,Z,B_R,B_Z,psi,Rm,Zm,Br,Bz,l,rr,u,d)
 use constants
 implicit none
 integer::i,j,ii,jj,l,rr,u,d
 real(kind=8)::Br,Bz,brld,brrd,brru,brlu,bzld,bzlu,bzrd,bzru,ds1,ds2,ds3,ds4,RRR,ZZZ
-real(kind=8),dimension(n,n)::R,Z,psi
+real(kind=8),dimension(n,n)::R,Z,psi,B_R,B_Z
 real(kind=8),dimension(n,n,0:10000)::Rm,Zm
 integer,dimension(n,n)::num
 l=0;rr=0;u=0;d=0;Br=0;Bz=0;
@@ -379,22 +360,15 @@ do j=1,n-1
         endif
 enddo
 if(l<rr.and.u>d)then
-Brld=-(psi(l,u)-psi(l,d-1))/(2*pi*R(l,d)*(Z(l,u)-Z(l,d-1)))
-Brrd=-(psi(rr,u)-psi(rr,d-1))/(2*pi*R(rr,d)*(Z(rr,u)-Z(rr,d-1)))
-Brru=-(psi(rr,u+1)-psi(rr,d))/(2*pi*R(rr,u)*(Z(rr,u+1)-Z(rr,d)))
-Brlu=-(psi(l,u+1)-psi(l,d))/(2*pi*R(l,u)*(Z(l,u+1)-Z(l,d)))
-
-Bzld=(psi(rr,d)-psi(l-1,d))/(2*pi*R(l,d)*(R(rr,d)-R(l-1,d)))
-Bzrd=(psi(rr+1,d)-psi(l,d))/(2*pi*R(rr,d)*(R(rr+1,d)-R(l,d)))
-Bzru=(psi(rr+1,u)-psi(l,u))/(2*pi*R(rr,u)*(R(rr+1,u)-R(l,u)))
-Bzlu=(psi(rr,u)-psi(l-1,u))/(2*pi*R(l,u)*(R(rr,u)-R(l-1,u)))
-
 ds1=RRR-R(l,d)
 ds2=R(rr,d)-RRR
 ds3=ZZZ-Z(rr,d)
 ds4=Z(rr,u)-ZZZ
-Br=(ds1*ds4*Brrd+ds4*ds2*Brld+ds3*ds1*Brru+ds3*ds2*Brlu)/((ds3+ds4)*(ds1+ds2))
-Bz=(ds1*ds4*Bzrd+ds4*ds2*Bzld+ds3*ds1*Bzru+ds3*ds2*Bzlu)/((ds3+ds4)*(ds1+ds2))
+!Br=(ds1*ds4*Brrd+ds4*ds2*Brld+ds3*ds1*Brru+ds3*ds2*Brlu)/((ds3+ds4)*(ds1+ds2))
+!Bz=(ds1*ds4*Bzrd+ds4*ds2*Bzld+ds3*ds1*Bzru+ds3*ds2*Bzlu)/((ds3+ds4)*(ds1+ds2))
+Br=(ds1*ds4*B_R(rr,d)+ds4*ds2*B_R(l,d)+ds3*ds1*B_R(rr,u)+ds3*ds2*B_R(l,u))/((ds3+ds4)*(ds1+ds2))
+Bz=(ds1*ds4*B_Z(rr,d)+ds4*ds2*B_Z(l,d)+ds3*ds1*B_Z(rr,u)+ds3*ds2*B_Z(l,u))/((ds3+ds4)*(ds1+ds2))
+
 endif
 end subroutine
 
